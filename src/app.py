@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify
-from scraper import search_flights, search_nearby
+from scraper import search_flights, search_nearby, enrich_with_hotel_prices
 from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -60,6 +60,14 @@ def search():
 
     if not results and not nearby:
         return jsonify({"error": "Keine Ergebnisse — Budget erhöhen oder anderen Flughafen wählen."}), 404
+
+    # Hotelpreise: alle Items auf einmal mit einem Playwright-Browser
+    all_items = results + [r for ap in nearby for r in ap.get("results", [])]
+    try:
+        enrich_with_hotel_prices(all_items, passengers)
+    except Exception:
+        for item in all_items:
+            item.setdefault("hotel_price_per_night", None)
 
     return jsonify({
         "results": results,

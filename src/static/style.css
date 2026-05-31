@@ -305,6 +305,18 @@ input[type="range"] {
 
 .detail strong { color: var(--text); }
 
+.hotel-found { color: var(--teal); }
+.hotel-found strong { color: #00695C; }
+
+.total-line {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+    font-weight: 600;
+    color: var(--text);
+}
+.total-line strong { color: var(--blue); font-size: 1rem; }
+
 .card-actions {
     display: flex;
     gap: 8px;

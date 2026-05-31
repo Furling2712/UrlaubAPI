@@ -1,6 +1,9 @@
 import requests
+import re
+import asyncio
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from playwright.async_api import async_playwright
 
 NEARBY = {
     "CGN": [
@@ -111,6 +114,98 @@ def search_flights(origin, dep_date, ret_date, budget, passengers, duration_min=
             continue
 
     return sorted(results, key=lambda x: x["price"])
+
+
+async def _fetch_hotel_price(context, city, checkin, checkout, adults, nights):
+    page = await context.new_page()
+    try:
+        url = (
+            f"https://www.booking.com/searchresults.de.html"
+            f"?ss={requests.utils.quote(city)}"
+            f"&checkin={checkin}&checkout={checkout}"
+            f"&group_adults={adults}&no_rooms=1&order=price&currency=EUR"
+        )
+        await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+
+        # Cookie-Banner
+        for sel in ['[data-testid="accept-btn"]', 'button:has-text("Akzeptieren")', '#onetrust-accept-btn-handler']:
+            try:
+                await page.click(sel, timeout=2000)
+                break
+            except Exception:
+                continue
+
+        await page.wait_for_timeout(3000)
+
+        # Gesamtpreis der ersten (günstigsten) Property holen, dann durch Nächte teilen
+        price_total = await page.evaluate("""() => {
+            // Erste Property-Karte = günstigstes Ergebnis
+            const card = document.querySelector('[data-testid="property-card"]');
+            if (!card) return null;
+
+            // Preis-Element innerhalb der Karte
+            const priceEl = card.querySelector('[data-testid="price-and-discounted-price"]');
+            if (priceEl) {
+                const digits = priceEl.textContent.replace(/[^\\d]/g, '');
+                const p = parseInt(digits);
+                if (p > 20 && p < 100000) return p;
+            }
+
+            // Fallback: alle Zahlen im ersten Card-Block, Minimum nehmen das plausibel ist
+            const nums = [];
+            card.querySelectorAll('*').forEach(el => {
+                if (el.children.length > 0) return;
+                const m = (el.textContent || '').trim().match(/^[€\\s]*(\\d{2,6})[€\\s]*$/);
+                if (m) {
+                    const p = parseInt(m[1]);
+                    if (p >= 20 && p <= 50000) nums.push(p);
+                }
+            });
+            return nums.length ? Math.max(...nums) : null;
+        }""")
+
+        if price_total and nights > 0:
+            return round(price_total / nights)
+        return None
+    except Exception:
+        return None
+    finally:
+        await page.close()
+
+
+async def _batch_hotel_prices(items, passengers):
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"]
+        )
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            locale="de-DE",
+            viewport={"width": 1280, "height": 800},
+        )
+        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+        tasks = []
+        for item in items:
+            city   = item["destination"].split(",")[0].strip()
+            nights = max(1, (datetime.strptime(item["return_date"], "%Y-%m-%d") -
+                             datetime.strptime(item["departure_date"], "%Y-%m-%d")).days)
+            tasks.append(_fetch_hotel_price(context, city, item["departure_date"],
+                                            item["return_date"], passengers, nights))
+
+        prices = await asyncio.gather(*tasks)
+        await browser.close()
+        return prices
+
+
+def enrich_with_hotel_prices(items, passengers):
+    """Fügt hotel_price_per_night zu jedem Item hinzu (in-place)."""
+    if not items:
+        return
+    prices = asyncio.run(_batch_hotel_prices(items, passengers))
+    for item, price in zip(items, prices):
+        item["hotel_price_per_night"] = price
 
 
 def search_nearby(origin, dep_date, ret_date, budget, passengers, duration_min=5, duration_max=12):

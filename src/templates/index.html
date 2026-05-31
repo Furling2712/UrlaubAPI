@@ -303,9 +303,20 @@ async function renderResults(data, payload) {
     const mapContainers = [];
 
     items.forEach((item, i) => {
-        const flightTotal  = item.price * passengers;
-        const hotelBudget  = Math.max(0, budget - flightTotal);
-        const mapId        = `map-${i}`;
+        const flightTotal = item.price * passengers;
+        const nights      = Math.round((new Date(item.return_date) - new Date(item.departure_date)) / 86400000);
+        const hotelTotal  = item.hotel_price_per_night ? item.hotel_price_per_night * nights * Math.ceil(passengers / 2) : null;
+        const grandTotal  = hotelTotal !== null ? flightTotal + hotelTotal : null;
+        const remaining   = Math.max(0, budget - flightTotal);
+        const mapId       = `map-${i}`;
+
+        const hotelLine = hotelTotal !== null
+            ? `<div class="detail hotel-found">🏨&nbsp; Hotel ab <strong>${item.hotel_price_per_night}€/Nacht</strong> · ${nights} Nächte ≈ <strong>${hotelTotal.toFixed(0)}€</strong></div>`
+            : `<div class="detail">🏨&nbsp; Für Hotel übrig: <strong>${remaining.toFixed(0)} €</strong></div>`;
+
+        const totalLine = grandTotal !== null
+            ? `<div class="detail total-line">💰&nbsp; Gesamt ca. <strong>${grandTotal.toFixed(0)} €</strong> von ${budget.toLocaleString('de')} €</div>`
+            : '';
 
         const card = document.createElement('div');
         card.className = 'card';
@@ -319,13 +330,14 @@ async function renderResults(data, payload) {
                     </div>
                     <div class="price-tag">
                         <span class="price-num">${item.price.toFixed(0)}&thinsp;€</span>
-                        <span class="price-pp">/ Person</span>
+                        <span class="price-pp">/ Person Flug</span>
                     </div>
                 </div>
                 <div class="card-details">
-                    <div class="detail">📅&nbsp; ${fmtDate(item.departure_date)} &ndash; ${fmtDate(item.return_date)}</div>
-                    <div class="detail">💸&nbsp; Flug gesamt: <strong>${flightTotal.toFixed(0)} €</strong></div>
-                    <div class="detail">🏨&nbsp; Für Hotel übrig: <strong>${hotelBudget.toFixed(0)} €</strong></div>
+                    <div class="detail">📅&nbsp; ${fmtDate(item.departure_date)} &ndash; ${fmtDate(item.return_date)} (${nights} Nächte)</div>
+                    <div class="detail">✈️&nbsp; Flug gesamt: <strong>${flightTotal.toFixed(0)} €</strong></div>
+                    ${hotelLine}
+                    ${totalLine}
                 </div>
             </div>
             <div class="card-actions">
@@ -362,8 +374,20 @@ async function renderResults(data, payload) {
             const grid = document.getElementById(`nearby-grid-${ap.iata}`);
             ap.results.forEach((item, i) => {
                 const flightTotal = item.price * passengers;
-                const hotelBudget = Math.max(0, budget - flightTotal);
+                const nights      = Math.round((new Date(item.return_date) - new Date(item.departure_date)) / 86400000);
+                const hotelTotal  = item.hotel_price_per_night ? item.hotel_price_per_night * nights * Math.ceil(passengers / 2) : null;
+                const grandTotal  = hotelTotal !== null ? flightTotal + hotelTotal : null;
+                const remaining   = Math.max(0, budget - flightTotal);
                 const mapId = `nmap-${ap.iata}-${i}`;
+
+                const hotelLine = hotelTotal !== null
+                    ? `<div class="detail hotel-found">🏨&nbsp; Hotel ab <strong>${item.hotel_price_per_night}€/Nacht</strong> · ${nights} Nächte ≈ <strong>${hotelTotal.toFixed(0)}€</strong></div>`
+                    : `<div class="detail">🏨&nbsp; Für Hotel übrig: <strong>${remaining.toFixed(0)} €</strong></div>`;
+
+                const totalLine = grandTotal !== null
+                    ? `<div class="detail total-line">💰&nbsp; Gesamt ca. <strong>${grandTotal.toFixed(0)} €</strong> von ${budget.toLocaleString('de')} €</div>`
+                    : '';
+
                 const card = document.createElement('div');
                 card.className = 'card card-nearby';
                 card.innerHTML = `
@@ -376,13 +400,14 @@ async function renderResults(data, payload) {
                             </div>
                             <div class="price-tag">
                                 <span class="price-num">${item.price.toFixed(0)}&thinsp;€</span>
-                                <span class="price-pp">/ Person</span>
+                                <span class="price-pp">/ Person Flug</span>
                             </div>
                         </div>
                         <div class="card-details">
-                            <div class="detail">📅&nbsp; ${fmtDate(item.departure_date)} &ndash; ${fmtDate(item.return_date)}</div>
-                            <div class="detail">💸&nbsp; Flug gesamt: <strong>${flightTotal.toFixed(0)} €</strong></div>
-                            <div class="detail">🏨&nbsp; Für Hotel übrig: <strong>${hotelBudget.toFixed(0)} €</strong></div>
+                            <div class="detail">📅&nbsp; ${fmtDate(item.departure_date)} &ndash; ${fmtDate(item.return_date)} (${nights} Nächte)</div>
+                            <div class="detail">✈️&nbsp; Flug gesamt: <strong>${flightTotal.toFixed(0)} €</strong></div>
+                            ${hotelLine}
+                            ${totalLine}
                         </div>
                     </div>
                     <div class="card-actions">
