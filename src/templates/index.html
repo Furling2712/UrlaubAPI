@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Urlaub Finder</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
+</head>
+<body>
+
+<div class="hero">
+    <div class="hero-inner">
+        <h1>Urlaub Finder</h1>
+        <p>Echte Ryanair-Preise · Kein Bullshit · Kein Account</p>
+    </div>
+</div>
+
+<div class="form-card">
+    <form id="searchForm">
+
+        <div class="field">
+            <label>Abflughafen</label>
+            <div class="radio-group">
+                <label class="radio-option">
+                    <input type="radio" name="origin" value="CGN" checked>
+                    <span>Köln / Bonn <em>CGN</em></span>
+                </label>
+                <label class="radio-option">
+                    <input type="radio" name="origin" value="NRN">
+                    <span>Weeze / Düsseldorf <em>NRN</em></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="field-row">
+            <div class="field">
+                <label>Frühster Abflug</label>
+                <input type="date" id="dep_from" required>
+            </div>
+            <div class="field">
+                <label>Spätester Abflug</label>
+                <input type="date" id="dep_to" required>
+            </div>
+        </div>
+
+        <div class="field">
+            <label>Reisedauer &nbsp;<span class="label-value" id="durVal">5 – 12 Nächte</span></label>
+            <div class="range-duo">
+                <div class="range-row">
+                    <span class="range-label">Min</span>
+                    <input type="range" id="dur_min" min="1" max="28" value="5" oninput="updateDur()">
+                </div>
+                <div class="range-row">
+                    <span class="range-label">Max</span>
+                    <input type="range" id="dur_max" min="1" max="28" value="12" oninput="updateDur()">
+                </div>
+            </div>
+        </div>
+
+        <div class="field">
+            <label>Gesamtbudget &nbsp;<span class="label-value" id="budgetVal">1.500 €</span></label>
+            <input type="range" id="budget" min="200" max="4000" step="50" value="1500"
+                oninput="document.getElementById('budgetVal').textContent = Number(this.value).toLocaleString('de') + ' €'">
+        </div>
+
+        <div class="field-row">
+            <div class="field">
+                <label>Reisende</label>
+                <input type="number" id="passengers" min="1" max="6" value="1">
+            </div>
+            <div class="field field-center">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="nonstop">
+                    <span>Nur Direktflüge</span>
+                </label>
+            </div>
+        </div>
+
+        <button type="submit" class="btn-search">Jetzt suchen</button>
+    </form>
+</div>
+
+<div id="loading" class="loading hidden">
+    <div class="spinner"></div>
+    <p>Suche bei Ryanair…</p>
+</div>
+
+<div id="errorBox" class="error-box hidden"></div>
+
+<div id="results" class="results-section hidden">
+    <div class="results-header">
+        <h2>Günstigste Ziele</h2>
+        <span id="resultsCount" class="results-count"></span>
+    </div>
+    <div class="cards-grid" id="cards"></div>
+</div>
+
+<div id="nearbySection" class="nearby-section hidden">
+    <div class="nearby-header">
+        <span class="nearby-icon">🚗</span>
+        <div>
+            <h2>Wenn du etwas weiter fährst…</h2>
+            <p>Günstigste Deals ab Nachbarflughäfen</p>
+        </div>
+    </div>
+    <div id="nearbyGroups"></div>
+</div>
+
+<script>
+// ── ISO-2 → ISO-numeric (für D3 world-atlas) ──────────────────────────────
+const COUNTRY_NUM = {
+  "AD":20,"AE":784,"AF":4,"AG":28,"AL":8,"AM":51,"AO":24,"AR":32,
+  "AT":40,"AU":36,"AZ":31,"BA":70,"BB":52,"BD":50,"BE":56,"BF":854,
+  "BG":100,"BH":48,"BI":108,"BJ":204,"BN":96,"BO":68,"BR":76,
+  "BS":44,"BT":64,"BW":72,"BY":112,"BZ":84,"CA":124,"CD":180,
+  "CF":140,"CG":178,"CH":756,"CI":384,"CL":152,"CM":120,"CN":156,
+  "CO":170,"CR":188,"CU":192,"CV":132,"CY":196,"CZ":203,"DE":276,
+  "DJ":262,"DK":208,"DO":214,"DZ":12,"EC":218,"EE":233,"EG":818,
+  "ER":232,"ES":724,"ET":231,"FI":246,"FJ":242,"FR":250,"GA":266,
+  "GB":826,"GE":268,"GH":288,"GM":270,"GN":324,"GQ":226,"GR":300,
+  "GT":320,"GW":624,"GY":328,"HN":340,"HR":191,"HT":332,"HU":348,
+  "ID":360,"IE":372,"IL":376,"IN":356,"IQ":368,"IR":364,"IS":352,
+  "IT":380,"JM":388,"JO":400,"JP":392,"KE":404,"KG":417,"KH":116,
+  "KM":174,"KP":408,"KR":410,"KW":414,"KZ":398,"LA":418,"LB":422,
+  "LI":438,"LK":144,"LR":430,"LS":426,"LT":440,"LU":442,"LV":428,
+  "LY":434,"MA":504,"MC":492,"MD":498,"ME":499,"MG":450,"MK":807,
+  "ML":466,"MM":104,"MN":496,"MR":478,"MT":470,"MU":480,"MV":462,
+  "MW":454,"MX":484,"MY":458,"MZ":508,"NA":516,"NE":562,"NG":566,
+  "NI":558,"NL":528,"NO":578,"NP":524,"NZ":554,"OM":512,"PA":591,
+  "PE":604,"PG":598,"PH":608,"PK":586,"PL":616,"PT":620,"PY":600,
+  "QA":634,"RO":642,"RS":688,"RU":643,"RW":646,"SA":682,"SB":90,
+  "SC":690,"SD":729,"SE":752,"SG":702,"SI":705,"SK":703,"SL":694,
+  "SN":686,"SO":706,"SR":740,"SS":728,"SV":222,"SY":760,"SZ":748,
+  "TD":148,"TG":768,"TH":764,"TJ":762,"TL":626,"TM":795,"TN":788,
+  "TO":776,"TR":792,"TT":780,"TZ":834,"UA":804,"UG":800,"US":840,
+  "UY":858,"UZ":860,"VC":670,"VE":862,"VN":704,"VU":548,"YE":887,
+  "ZA":710,"ZM":894,"ZW":716
+};
+
+function fmtDate(d) {
+    if (!d) return '—';
+    return new Date(d).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+// ── Klimafarben ────────────────────────────────────────────────────────────
+const CLIMATE = {
+    COLD: ["IS","NO","SE","FI","EE","LV","LT","BY","RU","GL"],
+    COOL: ["GB","IE","DK","NL","BE","LU","DE","PL","CZ","SK","AT","CH","HU"],
+    MILD: ["FR","SI","HR","RO","BG","RS","BA","ME","MK","AL","UA","MD","GE","AM","AZ"],
+    WARM: ["ES","PT","IT","GR","TR","CY","MT","KZ","UZ"],
+    HOT:  ["MA","TN","DZ","LY","EG","IL","JO","LB","SA","AE","KW","QA","BH","OM","IQ","SY","IR",
+            "SN","GH","NG","KE","ET","TZ","IN","TH","PK","BD","VN","PH","ID","MX","DO","CU"]
+};
+
+function climateColor(code) {
+    if (CLIMATE.HOT.includes(code))  return "#e53935";
+    if (CLIMATE.WARM.includes(code)) return "#f4511e";
+    if (CLIMATE.MILD.includes(code)) return "#f9a825";
+    if (CLIMATE.COOL.includes(code)) return "#388e3c";
+    if (CLIMATE.COLD.includes(code)) return "#1565C0";
+    return "#8e24aa";
+}
+
+// ── Mini-Weltkarte mit Zoom ────────────────────────────────────────────────
+let _worldCache = null;
+
+async function getWorld() {
+    if (_worldCache) return _worldCache;
+    const r = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
+    _worldCache = await r.json();
+    return _worldCache;
+}
+
+async function renderMap(el, countryCode) {
+    const world = await getWorld();
+    const targetNum = COUNTRY_NUM[countryCode];
+    const VW = 400, VH = 160;
+
+    const svg = d3.select(el).append('svg')
+        .attr('viewBox', `0 0 ${VW} ${VH}`)
+        .attr('width', '100%')
+        .attr('height', VH)
+        .style('display', 'block');
+
+    svg.append('rect').attr('width', VW).attr('height', VH).attr('fill', '#dce8f5');
+
+    const proj = d3.geoNaturalEarth1()
+        .scale(VW / 6.3)
+        .translate([VW / 2, VH / 2 + 8]);
+
+    const pathGen = d3.geoPath().projection(proj);
+    const countries = topojson.feature(world, world.objects.countries);
+    const color = climateColor(countryCode);
+
+    const g = svg.append('g');
+
+    g.selectAll('path')
+        .data(countries.features)
+        .join('path')
+        .attr('d', pathGen)
+        .attr('fill', d => +d.id === targetNum ? color : '#c5d5e8')
+        .attr('stroke', '#fff')
+        .attr('stroke-width', 0.35);
+
+    // Zoom aufs Zielland
+    if (targetNum) {
+        const target = countries.features.find(d => +d.id === targetNum);
+        if (target) {
+            const [[x0, y0], [x1, y1]] = pathGen.bounds(target);
+            const bw = x1 - x0, bh = y1 - y0;
+            if (bw > 0 && bh > 0) {
+                // padFactor: wie viel Kontext drumherum (kleiner = mehr Zoom)
+                const padFactor = 3.2;
+                const scale = Math.min(VW / (bw * padFactor), VH / (bh * padFactor), 9);
+                const cx = (x0 + x1) / 2;
+                const cy = (y0 + y1) / 2;
+                g.attr('transform',
+                    `translate(${VW/2 - scale*cx}, ${VH/2 - scale*cy}) scale(${scale})`
+                );
+                g.selectAll('path').attr('stroke-width', 0.35 / scale);
+            }
+        }
+    }
+}
+
+// ── Datum-Defaults ─────────────────────────────────────────────────────────
+function addDays(n) {
+    const d = new Date(); d.setDate(d.getDate() + n);
+    return d.toISOString().split('T')[0];
+}
+const today = addDays(0);
+document.getElementById('dep_from').min = today;
+document.getElementById('dep_from').value = addDays(21);
+document.getElementById('dep_to').min = today;
+document.getElementById('dep_to').value = addDays(70);
+
+document.getElementById('dep_from').addEventListener('change', function () {
+    document.getElementById('dep_to').min = this.value;
+});
+
+function updateDur() {
+    let a = parseInt(document.getElementById('dur_min').value);
+    let b = parseInt(document.getElementById('dur_max').value);
+    if (a > b) { b = a; document.getElementById('dur_max').value = b; }
+    document.getElementById('durVal').textContent = a + ' – ' + b + ' Nächte';
+}
+
+// ── Suche ──────────────────────────────────────────────────────────────────
+document.getElementById('searchForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+
+    const payload = {
+        origin:       document.querySelector('input[name="origin"]:checked').value,
+        departure_from: document.getElementById('dep_from').value,
+        departure_to:   document.getElementById('dep_to').value,
+        duration_min: parseInt(document.getElementById('dur_min').value),
+        duration_max: parseInt(document.getElementById('dur_max').value),
+        budget:       parseInt(document.getElementById('budget').value),
+        passengers:   parseInt(document.getElementById('passengers').value),
+        nonstop:      document.getElementById('nonstop').checked,
+    };
+
+    document.getElementById('loading').classList.remove('hidden');
+    document.getElementById('results').classList.add('hidden');
+    document.getElementById('errorBox').classList.add('hidden');
+
+    try {
+        const resp = await fetch('/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+        await renderResults(data, payload);
+    } catch (err) {
+        const box = document.getElementById('errorBox');
+        box.textContent = '⚠️ ' + err.message;
+        box.classList.remove('hidden');
+    } finally {
+        document.getElementById('loading').classList.add('hidden');
+    }
+});
+
+// ── Ergebnisse rendern ─────────────────────────────────────────────────────
+async function renderResults(data, payload) {
+    const items      = data.results || [];
+    const passengers = data.passengers || payload.passengers;
+    const budget     = data.budget     || payload.budget;
+
+    if (!items.length) {
+        const box = document.getElementById('errorBox');
+        box.textContent = '⚠️ Keine Ergebnisse — Budget erhöhen oder anderen Flughafen wählen.';
+        box.classList.remove('hidden');
+        return;
+    }
+
+    const grid = document.getElementById('cards');
+    grid.innerHTML = '';
+
+    const mapContainers = [];
+
+    items.forEach((item, i) => {
+        const flightTotal  = item.price * passengers;
+        const hotelBudget  = Math.max(0, budget - flightTotal);
+        const mapId        = `map-${i}`;
+
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+            <div class="card-map" id="${mapId}"></div>
+            <div class="card-body">
+                <div class="card-title-row">
+                    <div class="card-dest">
+                        <img class="dest-flag" src="https://flagcdn.com/32x24/${item.country_code.toLowerCase()}.png" alt="${item.country_code}" onerror="this.style.display='none'">
+                        <h3>${item.destination}</h3>
+                    </div>
+                    <div class="price-tag">
+                        <span class="price-num">${item.price.toFixed(0)}&thinsp;€</span>
+                        <span class="price-pp">/ Person</span>
+                    </div>
+                </div>
+                <div class="card-details">
+                    <div class="detail">📅&nbsp; ${fmtDate(item.departure_date)} &ndash; ${fmtDate(item.return_date)}</div>
+                    <div class="detail">💸&nbsp; Flug gesamt: <strong>${flightTotal.toFixed(0)} €</strong></div>
+                    <div class="detail">🏨&nbsp; Für Hotel übrig: <strong>${hotelBudget.toFixed(0)} €</strong></div>
+                </div>
+            </div>
+            <div class="card-actions">
+                <a href="${item.direct_url}" target="_blank" rel="noopener" class="btn-action btn-flight">✈️ Ryanair</a>
+                <a href="${item.booking_url}" target="_blank" rel="noopener" class="btn-action btn-hotel">🏨 Hotel</a>
+            </div>`;
+
+        grid.appendChild(card);
+        mapContainers.push({ id: mapId, code: item.country_code });
+    });
+
+    document.getElementById('resultsCount').textContent = `${items.length} Ziele gefunden`;
+    document.getElementById('results').classList.remove('hidden');
+    document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+
+    // Nearby-Airports rendern
+    const nearbyGroups = document.getElementById('nearbyGroups');
+    nearbyGroups.innerHTML = '';
+    const nearby = data.nearby || [];
+    if (nearby.length) {
+        nearby.forEach(ap => {
+            if (!ap.results || !ap.results.length) return;
+            const section = document.createElement('div');
+            section.className = 'nearby-group';
+            section.innerHTML = `
+                <div class="nearby-airport-header">
+                    <span class="nearby-iata">${ap.iata}</span>
+                    <span class="nearby-name">${ap.name}</span>
+                    <span class="nearby-drive">🚗 ${ap.drive} Fahrt</span>
+                </div>
+                <div class="cards-grid" id="nearby-grid-${ap.iata}"></div>`;
+            nearbyGroups.appendChild(section);
+
+            const grid = document.getElementById(`nearby-grid-${ap.iata}`);
+            ap.results.forEach((item, i) => {
+                const flightTotal = item.price * passengers;
+                const hotelBudget = Math.max(0, budget - flightTotal);
+                const mapId = `nmap-${ap.iata}-${i}`;
+                const card = document.createElement('div');
+                card.className = 'card card-nearby';
+                card.innerHTML = `
+                    <div class="card-map" id="${mapId}"></div>
+                    <div class="card-body">
+                        <div class="card-title-row">
+                            <div class="card-dest">
+                                <img class="dest-flag" src="https://flagcdn.com/32x24/${item.country_code.toLowerCase()}.png" alt="${item.country_code}" onerror="this.style.display='none'">
+                                <h3>${item.destination}</h3>
+                            </div>
+                            <div class="price-tag">
+                                <span class="price-num">${item.price.toFixed(0)}&thinsp;€</span>
+                                <span class="price-pp">/ Person</span>
+                            </div>
+                        </div>
+                        <div class="card-details">
+                            <div class="detail">📅&nbsp; ${fmtDate(item.departure_date)} &ndash; ${fmtDate(item.return_date)}</div>
+                            <div class="detail">💸&nbsp; Flug gesamt: <strong>${flightTotal.toFixed(0)} €</strong></div>
+                            <div class="detail">🏨&nbsp; Für Hotel übrig: <strong>${hotelBudget.toFixed(0)} €</strong></div>
+                        </div>
+                    </div>
+                    <div class="card-actions">
+                        <a href="${item.direct_url}" target="_blank" rel="noopener" class="btn-action btn-flight">✈️ Ryanair</a>
+                        <a href="${item.booking_url}" target="_blank" rel="noopener" class="btn-action btn-hotel">🏨 Hotel</a>
+                    </div>`;
+                grid.appendChild(card);
+                mapContainers.push({ id: mapId, code: item.country_code });
+            });
+        });
+        document.getElementById('nearbySection').classList.remove('hidden');
+    } else {
+        document.getElementById('nearbySection').classList.add('hidden');
+    }
+
+    // Alle Karten parallel rendern (Haupt + Nearby)
+    await Promise.all(mapContainers.map(({ id, code }) =>
+        renderMap(document.getElementById(id), code)
+    ));
+}
+</script>
+</body>
+</html>
