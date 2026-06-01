@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify
-from scraper import search_flights, search_nearby, enrich_with_hotel_prices
+from scraper import search_flights, search_nearby, enrich_with_hotel_prices, get_germany_hotel_options, get_wellness_hotel_options
 from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -76,6 +76,73 @@ def search():
         "budget": budget,
         "duration_min": duration_min,
         "duration_max": duration_max,
+    })
+
+
+@app.route("/search-hotels-de", methods=["POST"])
+def search_hotels_de():
+    from datetime import datetime, timedelta
+    data         = request.json
+    passengers   = int(data.get("passengers", 1))
+    budget       = int(data.get("budget", 1500))
+    dep_from     = data.get("departure_from")
+    duration_min = int(data.get("duration_min", 5))
+    duration_max = int(data.get("duration_max", 12))
+
+    if not dep_from:
+        return jsonify({"error": "Bitte ein Abflugdatum angeben."}), 400
+
+    duration_avg = round((duration_min + duration_max) / 2)
+    checkout = (datetime.strptime(dep_from, "%Y-%m-%d") + timedelta(days=duration_avg)).strftime("%Y-%m-%d")
+    nights   = duration_avg
+
+    items = get_germany_hotel_options(dep_from, checkout, passengers)
+    try:
+        enrich_with_hotel_prices(items, passengers)
+    except Exception:
+        for item in items:
+            item.setdefault("hotel_price_per_night", None)
+
+    return jsonify({
+        "destinations": items,
+        "passengers":   passengers,
+        "budget":       budget,
+        "checkin":      dep_from,
+        "checkout":     checkout,
+        "nights":       nights,
+    })
+
+
+@app.route("/search-hotels-wellness", methods=["POST"])
+def search_hotels_wellness():
+    from datetime import datetime, timedelta
+    data         = request.json
+    passengers   = int(data.get("passengers", 1))
+    budget       = int(data.get("budget", 1500))
+    dep_from     = data.get("departure_from")
+    duration_min = int(data.get("duration_min", 2))
+    duration_max = int(data.get("duration_max", 5))
+
+    if not dep_from:
+        return jsonify({"error": "Bitte ein Datum angeben."}), 400
+
+    duration_avg = round((duration_min + duration_max) / 2)
+    checkout = (datetime.strptime(dep_from, "%Y-%m-%d") + timedelta(days=duration_avg)).strftime("%Y-%m-%d")
+
+    items = get_wellness_hotel_options(dep_from, checkout, passengers)
+    try:
+        enrich_with_hotel_prices(items, passengers)
+    except Exception:
+        for item in items:
+            item.setdefault("hotel_price_per_night", None)
+
+    return jsonify({
+        "destinations": items,
+        "passengers":   passengers,
+        "budget":       budget,
+        "checkin":      dep_from,
+        "checkout":     checkout,
+        "nights":       duration_avg,
     })
 
 

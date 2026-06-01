@@ -82,6 +82,14 @@ def search_flights(origin, dep_date, ret_date, budget, passengers, duration_min=
             dep_dt = outbound.get("departureDate", "")[:10]
             ret_dt = (inbound.get("departureDate") or "")[:10]
 
+            if dep_dt and ret_dt:
+                try:
+                    actual_nights = (datetime.strptime(ret_dt, "%Y-%m-%d") - datetime.strptime(dep_dt, "%Y-%m-%d")).days
+                    if not (duration_min <= actual_nights <= duration_max):
+                        continue
+                except ValueError:
+                    pass
+
             dep_fmt = dep_dt.replace("-", "")[2:]
             ret_fmt = ret_dt.replace("-", "")[2:]
 
@@ -188,7 +196,7 @@ async def _batch_hotel_prices(items, passengers):
 
         tasks = []
         for item in items:
-            city   = item["destination"].split(",")[0].strip()
+            city   = item.get("search_term") or item["destination"].split(",")[0].strip()
             nights = max(1, (datetime.strptime(item["return_date"], "%Y-%m-%d") -
                              datetime.strptime(item["departure_date"], "%Y-%m-%d")).days)
             tasks.append(_fetch_hotel_price(context, city, item["departure_date"],
@@ -206,6 +214,84 @@ def enrich_with_hotel_prices(items, passengers):
     prices = asyncio.run(_batch_hotel_prices(items, passengers))
     for item, price in zip(items, prices):
         item["hotel_price_per_night"] = price
+
+
+GERMANY_DESTINATIONS = [
+    {"name": "Sylt",             "region": "Schleswig-Holstein",     "lat": 54.91, "lon":  8.33},
+    {"name": "St. Peter-Ording", "region": "Schleswig-Holstein",     "lat": 54.31, "lon":  8.65},
+    {"name": "Rügen",            "region": "Mecklenburg-Vorpommern", "lat": 54.37, "lon": 13.38},
+    {"name": "Usedom",           "region": "Mecklenburg-Vorpommern", "lat": 53.90, "lon": 14.02},
+    {"name": "Allgäu",           "region": "Bayern",                 "lat": 47.56, "lon": 10.31},
+    {"name": "Schwarzwald",      "region": "Baden-Württemberg",      "lat": 47.93, "lon":  8.18},
+    {"name": "Bayerischer Wald", "region": "Bayern",                 "lat": 48.93, "lon": 13.37},
+    {"name": "Harz",             "region": "Sachsen-Anhalt",         "lat": 51.83, "lon": 10.78},
+    {"name": "Mosel",            "region": "Rheinland-Pfalz",        "lat": 50.15, "lon":  7.17},
+    {"name": "Sauerland",        "region": "Nordrhein-Westfalen",    "lat": 51.19, "lon":  8.14},
+    {"name": "Lübecker Bucht",   "region": "Schleswig-Holstein",     "lat": 54.00, "lon": 10.74},
+    {"name": "Berchtesgaden",    "region": "Bayern",                 "lat": 47.63, "lon": 13.00},
+]
+
+
+WELLNESS_DESTINATIONS = [
+    {"name": "Valkenburg",       "region": "Niederlande",         "country": "NL", "lat": 50.86, "lon":  5.83},
+    {"name": "Spa",              "region": "Belgien",             "country": "BE", "lat": 50.49, "lon":  5.86},
+    {"name": "Ardennes",         "region": "Belgien",             "country": "BE", "lat": 50.23, "lon":  5.68},
+    {"name": "Bad Münstereifel", "region": "Nordrhein-Westfalen", "country": "DE", "lat": 50.56, "lon":  6.76},
+    {"name": "Eifel",            "region": "Rheinland-Pfalz",     "country": "DE", "lat": 50.35, "lon":  6.85},
+    {"name": "Bad Neuenahr",     "region": "Rheinland-Pfalz",     "country": "DE", "lat": 50.55, "lon":  7.12},
+    {"name": "Bergisches Land",  "region": "Nordrhein-Westfalen", "country": "DE", "lat": 51.10, "lon":  7.42},
+    {"name": "Mosel",            "region": "Rheinland-Pfalz",     "country": "DE", "lat": 50.15, "lon":  7.17},
+    {"name": "Hunsrück",         "region": "Rheinland-Pfalz",     "country": "DE", "lat": 49.90, "lon":  7.30},
+    {"name": "Westerwald",       "region": "Rheinland-Pfalz",     "country": "DE", "lat": 50.63, "lon":  7.95},
+]
+
+
+def get_wellness_hotel_options(checkin, checkout, passengers):
+    nights = max(1, (datetime.strptime(checkout, "%Y-%m-%d") - datetime.strptime(checkin, "%Y-%m-%d")).days)
+    return [
+        {
+            "destination":   dest["name"],
+            "search_term":   f"wellness hotel {dest['name']}",
+            "region":        dest["region"],
+            "country_code":  dest["country"],
+            "lat":           dest["lat"],
+            "lon":           dest["lon"],
+            "price":         0,
+            "departure_date": checkin,
+            "return_date":    checkout,
+            "nights":         nights,
+            "booking_url": (
+                f"https://www.booking.com/searchresults.de.html"
+                f"?ss={requests.utils.quote('wellness hotel ' + dest['name'])}"
+                f"&checkin={checkin}&checkout={checkout}"
+                f"&group_adults={passengers}&no_rooms=1&order=price"
+            ),
+        }
+        for dest in WELLNESS_DESTINATIONS
+    ]
+
+
+def get_germany_hotel_options(checkin, checkout, passengers):
+    nights = max(1, (datetime.strptime(checkout, "%Y-%m-%d") - datetime.strptime(checkin, "%Y-%m-%d")).days)
+    return [
+        {
+            "destination": dest["name"],
+            "region":      dest["region"],
+            "lat":         dest["lat"],
+            "lon":         dest["lon"],
+            "country_code": "DE",
+            "price":        0,
+            "departure_date": checkin,
+            "return_date":    checkout,
+            "nights":         nights,
+            "booking_url": (
+                f"https://www.booking.com/searchresults.de.html"
+                f"?ss={requests.utils.quote(dest['name'])}&checkin={checkin}&checkout={checkout}"
+                f"&group_adults={passengers}&no_rooms=1&order=price"
+            ),
+        }
+        for dest in GERMANY_DESTINATIONS
+    ]
 
 
 def search_nearby(origin, dep_date, ret_date, budget, passengers, duration_min=5, duration_max=12):

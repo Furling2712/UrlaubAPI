@@ -13,7 +13,7 @@
 <div class="hero">
     <div class="hero-inner">
         <h1>Urlaub Finder</h1>
-        <p>Echte Ryanair-Preise · Kein Bullshit · Kein Account</p>
+        <p>Echte Preise · Kein Bullshit · Kein Account</p>
     </div>
 </div>
 
@@ -21,6 +21,28 @@
     <form id="searchForm">
 
         <div class="field">
+            <label>Reiseart</label>
+            <div class="radio-group">
+                <label class="radio-option">
+                    <input type="radio" name="travel_type" value="flug" checked>
+                    <span>✈️ Flug</span>
+                </label>
+                <label class="radio-option">
+                    <input type="radio" name="travel_type" value="deutschland">
+                    <span>🇩🇪 Deutschland</span>
+                </label>
+                <label class="radio-option">
+                    <input type="radio" name="travel_type" value="wellness">
+                    <span>🧖 Wellness</span>
+                </label>
+                <label class="radio-option">
+                    <input type="radio" name="travel_type" value="kreuzfahrt">
+                    <span>🚢 Kreuzfahrt</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="field" id="originField">
             <label>Abflughafen</label>
             <div class="radio-group">
                 <label class="radio-option">
@@ -36,10 +58,10 @@
 
         <div class="field-row">
             <div class="field">
-                <label>Frühster Abflug</label>
+                <label id="depFromLabel">Frühster Abflug</label>
                 <input type="date" id="dep_from" required>
             </div>
-            <div class="field">
+            <div class="field" id="depToField">
                 <label>Spätester Abflug</label>
                 <input type="date" id="dep_to" required>
             </div>
@@ -70,7 +92,7 @@
                 <label>Reisende</label>
                 <input type="number" id="passengers" min="1" max="6" value="1">
             </div>
-            <div class="field field-center">
+            <div class="field field-center" id="nonstopField">
                 <label class="checkbox-label">
                     <input type="checkbox" id="nonstop">
                     <span>Nur Direktflüge</span>
@@ -84,7 +106,7 @@
 
 <div id="loading" class="loading hidden">
     <div class="spinner"></div>
-    <p>Suche bei Ryanair…</p>
+    <p id="loadingText">Suche…</p>
 </div>
 
 <div id="errorBox" class="error-box hidden"></div>
@@ -106,6 +128,30 @@
         </div>
     </div>
     <div id="nearbyGroups"></div>
+</div>
+
+<div id="deResults" class="results-section hidden">
+    <div class="results-header">
+        <h2>🇩🇪 Urlaub in Deutschland</h2>
+        <span class="results-count">Günstigste Regionen ab Eschweiler</span>
+    </div>
+    <div class="cards-grid" id="deCards"></div>
+</div>
+
+<div id="wellnessResults" class="results-section hidden">
+    <div class="results-header">
+        <h2>🧖 Wellness-Hotels in der Nähe</h2>
+        <span class="results-count">Bis ~150 km ab Eschweiler · D / BE / NL</span>
+    </div>
+    <div class="cards-grid" id="wellnessCards"></div>
+</div>
+
+<div id="cruiseResults" class="results-section hidden">
+    <div class="results-header">
+        <h2>🚢 Kreuzfahrten finden</h2>
+        <span class="results-count">Direkte Links zu den bekanntesten Anbietern</span>
+    </div>
+    <div class="cards-grid" id="cruiseCards"></div>
 </div>
 
 <script>
@@ -193,7 +239,6 @@ async function renderMap(el, countryCode) {
     const pathGen = d3.geoPath().projection(proj);
     const countries = topojson.feature(world, world.objects.countries);
     const color = climateColor(countryCode);
-
     const g = svg.append('g');
 
     g.selectAll('path')
@@ -204,14 +249,12 @@ async function renderMap(el, countryCode) {
         .attr('stroke', '#fff')
         .attr('stroke-width', 0.35);
 
-    // Zoom aufs Zielland
     if (targetNum) {
         const target = countries.features.find(d => +d.id === targetNum);
         if (target) {
             const [[x0, y0], [x1, y1]] = pathGen.bounds(target);
             const bw = x1 - x0, bh = y1 - y0;
             if (bw > 0 && bh > 0) {
-                // padFactor: wie viel Kontext drumherum (kleiner = mehr Zoom)
                 const padFactor = 3.2;
                 const scale = Math.min(VW / (bw * padFactor), VH / (bh * padFactor), 9);
                 const cx = (x0 + x1) / 2;
@@ -247,25 +290,226 @@ function updateDur() {
     document.getElementById('durVal').textContent = a + ' – ' + b + ' Nächte';
 }
 
+// ── Reiseart umschalten ────────────────────────────────────────────────────
+function updateTravelType() {
+    const type = document.querySelector('input[name="travel_type"]:checked').value;
+    const isFlug = type === 'flug';
+
+    document.getElementById('originField').style.display  = isFlug ? '' : 'none';
+    document.getElementById('nonstopField').style.display = isFlug ? '' : 'none';
+    // Wellness und Deutschland brauchen nur ein Startdatum
+    const needsRange = isFlug || type === 'kreuzfahrt';
+    document.getElementById('depToField').style.display   = needsRange ? '' : 'none';
+    document.getElementById('depFromLabel').textContent   = needsRange ? 'Frühster Abflug' : 'Anreisedatum';
+
+    ['results','nearbySection','deResults','wellnessResults','cruiseResults','errorBox'].forEach(id =>
+        document.getElementById(id).classList.add('hidden')
+    );
+}
+document.querySelectorAll('input[name="travel_type"]').forEach(r => r.addEventListener('change', updateTravelType));
+
+// ── Fahrtstrecke ab Eschweiler ─────────────────────────────────────────────
+const ESCHWEILER = { lat: 50.817, lon: 6.273 };
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 +
+              Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+    return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)) * 1.3);
+}
+
+function driveTime(km) {
+    const totalMin = Math.round(km / 90 * 60 / 15) * 15;
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    if (h === 0) return `ca. ${m} Min.`;
+    if (m === 0) return `ca. ${h} Std.`;
+    return `ca. ${h} Std. ${m} Min.`;
+}
+
+const COUNTRY_FLAG = { DE: "🇩🇪", BE: "🇧🇪", NL: "🇳🇱", LU: "🇱🇺", AT: "🇦🇹", CH: "🇨🇭", FR: "🇫🇷" };
+
+// ── Hotel-Karte bauen (Deutschland + Wellness) ─────────────────────────────
+function buildHotelCard(dest, nights, passengers, budget, showFlag) {
+    const km    = haversineKm(ESCHWEILER.lat, ESCHWEILER.lon, dest.lat, dest.lon);
+    const rooms = Math.ceil(passengers / 2);
+    const priceKnown  = dest.hotel_price_per_night !== null && dest.hotel_price_per_night !== undefined;
+    const hotelTotal  = priceKnown ? dest.hotel_price_per_night * nights * rooms : null;
+    const overBudget  = hotelTotal !== null && hotelTotal > budget;
+    const flag        = showFlag ? (COUNTRY_FLAG[dest.country_code] || "🇩🇪") : "🇩🇪";
+
+    const priceBadge = priceKnown
+        ? `<div class="price-tag">
+               <span class="price-num">${dest.hotel_price_per_night}&thinsp;€</span>
+               <span class="price-pp">/ Nacht</span>
+           </div>`
+        : `<div class="price-tag" style="opacity:.45"><span class="price-pp">kein Preis</span></div>`;
+
+    const totalLine = hotelTotal !== null
+        ? `<div class="detail ${overBudget ? '' : 'total-line'}">
+               💰&nbsp; Hotel gesamt: <strong>${hotelTotal.toFixed(0)} €</strong>
+               (${rooms} Zimmer · ${nights} Nächte)${overBudget ? ' ⚠️ über Budget' : ''}
+           </div>`
+        : '';
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+        <div class="card-body">
+            <div class="card-title-row">
+                <div class="card-dest">
+                    <span style="font-size:1.6rem;margin-right:6px;line-height:1">${flag}</span>
+                    <div>
+                        <h3>${dest.destination}</h3>
+                        <small style="color:#888;font-size:.8rem">${dest.region}</small>
+                    </div>
+                </div>
+                ${priceBadge}
+            </div>
+            <div class="card-details">
+                <div class="detail">🚗&nbsp; <strong>${km} km</strong> ab Eschweiler &nbsp;·&nbsp; ${driveTime(km)}</div>
+                <div class="detail">📅&nbsp; ${fmtDate(dest.departure_date)} &ndash; ${fmtDate(dest.return_date)} (${nights} Nächte)</div>
+                ${totalLine}
+            </div>
+        </div>
+        <div class="card-actions">
+            <a href="${dest.booking_url}" target="_blank" rel="noopener" class="btn-action btn-hotel">🏨 Hotels ansehen</a>
+        </div>`;
+    return card;
+}
+
+// ── Deutschland-Suche ──────────────────────────────────────────────────────
+async function renderDeutschlandResults(payload) {
+    document.getElementById('loadingText').textContent = 'Suche Hotelpreise in Deutschland…';
+    document.getElementById('loading').classList.remove('hidden');
+    try {
+        const resp = await fetch('/search-hotels-de', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+
+        const grid = document.getElementById('deCards');
+        grid.innerHTML = '';
+        const sorted = [...(data.destinations || [])].sort((a, b) =>
+            (a.hotel_price_per_night ?? Infinity) - (b.hotel_price_per_night ?? Infinity)
+        );
+        sorted.forEach(dest => grid.appendChild(buildHotelCard(dest, data.nights, data.passengers, data.budget, false)));
+
+        document.getElementById('deResults').classList.remove('hidden');
+        document.getElementById('deResults').scrollIntoView({ behavior: 'smooth' });
+    } catch (err) {
+        showError(err.message);
+    } finally {
+        document.getElementById('loading').classList.add('hidden');
+    }
+}
+
+// ── Wellness-Suche ─────────────────────────────────────────────────────────
+async function renderWellnessResults(payload) {
+    document.getElementById('loadingText').textContent = 'Suche Wellness-Hotels in der Nähe…';
+    document.getElementById('loading').classList.remove('hidden');
+    try {
+        const resp = await fetch('/search-hotels-wellness', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+
+        const grid = document.getElementById('wellnessCards');
+        grid.innerHTML = '';
+        const sorted = [...(data.destinations || [])].sort((a, b) =>
+            (a.hotel_price_per_night ?? Infinity) - (b.hotel_price_per_night ?? Infinity)
+        );
+        sorted.forEach(dest => grid.appendChild(buildHotelCard(dest, data.nights, data.passengers, data.budget, true)));
+
+        document.getElementById('wellnessResults').classList.remove('hidden');
+        document.getElementById('wellnessResults').scrollIntoView({ behavior: 'smooth' });
+    } catch (err) {
+        showError(err.message);
+    } finally {
+        document.getElementById('loading').classList.add('hidden');
+    }
+}
+
+// ── Kreuzfahrt-Ergebnisse ──────────────────────────────────────────────────
+function renderCruiseResults(payload) {
+    const lines = [
+        { name: "AIDA Cruises",     icon: "🚢", desc: "Deutschlands beliebteste Reederei · ab Kiel, Hamburg, Rostock/Warnemünde", url: "https://www.aida.de/kreuzfahrten.html" },
+        { name: "TUI Mein Schiff",  icon: "⛵", desc: "Premium All-Inclusive · ab Hamburg, Kiel",                                  url: "https://www.meinschiff.com/kreuzfahrten" },
+        { name: "MSC Kreuzfahrten", icon: "🛳️", desc: "Weltweite Routen, Mittelmeer-Spezialist · ab Kiel, Hamburg, Genua",        url: "https://www.msccruises.de" },
+        { name: "Costa Cruises",    icon: "⚓", desc: "Europas erfahrenster Kreuzfahrtveranstalter · viele Mittelmeer-Routen",     url: "https://www.costacruises.de" },
+        { name: "Kreuzfahrten.de",  icon: "🔍", desc: "Preisvergleich: Alle Anbieter auf einen Blick",                             url: "https://www.kreuzfahrten.de" },
+    ];
+    const grid = document.getElementById('cruiseCards');
+    grid.innerHTML = '';
+    const nights   = `${payload.duration_min}–${payload.duration_max} Nächte`;
+    const depRange = `${fmtDate(payload.departure_from)} – ${fmtDate(payload.departure_to)}`;
+    lines.forEach(line => {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+            <div class="card-body">
+                <div class="card-title-row">
+                    <div class="card-dest">
+                        <span style="font-size:2rem;margin-right:8px;line-height:1">${line.icon}</span>
+                        <h3>${line.name}</h3>
+                    </div>
+                </div>
+                <div class="card-details">
+                    <div class="detail">${line.desc}</div>
+                    <div class="detail">📅&nbsp; Abflug: <strong>${depRange}</strong></div>
+                    <div class="detail">🌙&nbsp; Dauer: <strong>${nights}</strong> &nbsp;·&nbsp; 👤 <strong>${payload.passengers}</strong> Person(en)</div>
+                    <div class="detail">💰&nbsp; Budget: <strong>${payload.budget.toLocaleString('de')} €</strong></div>
+                </div>
+            </div>
+            <div class="card-actions">
+                <a href="${line.url}" target="_blank" rel="noopener" class="btn-action btn-flight">Zur Website →</a>
+            </div>`;
+        grid.appendChild(card);
+    });
+    document.getElementById('cruiseResults').classList.remove('hidden');
+    document.getElementById('cruiseResults').scrollIntoView({ behavior: 'smooth' });
+}
+
+function showError(msg) {
+    const box = document.getElementById('errorBox');
+    box.textContent = '⚠️ ' + msg;
+    box.classList.remove('hidden');
+}
+
 // ── Suche ──────────────────────────────────────────────────────────────────
 document.getElementById('searchForm').addEventListener('submit', async function (e) {
     e.preventDefault();
 
+    const travelType = document.querySelector('input[name="travel_type"]:checked').value;
     const payload = {
-        origin:       document.querySelector('input[name="origin"]:checked').value,
+        origin:         document.querySelector('input[name="origin"]:checked').value,
         departure_from: document.getElementById('dep_from').value,
-        departure_to:   document.getElementById('dep_to').value,
-        duration_min: parseInt(document.getElementById('dur_min').value),
-        duration_max: parseInt(document.getElementById('dur_max').value),
-        budget:       parseInt(document.getElementById('budget').value),
-        passengers:   parseInt(document.getElementById('passengers').value),
-        nonstop:      document.getElementById('nonstop').checked,
+        departure_to:   document.getElementById('dep_to').value || document.getElementById('dep_from').value,
+        duration_min:   parseInt(document.getElementById('dur_min').value),
+        duration_max:   parseInt(document.getElementById('dur_max').value),
+        budget:         parseInt(document.getElementById('budget').value),
+        passengers:     parseInt(document.getElementById('passengers').value),
+        nonstop:        document.getElementById('nonstop').checked,
     };
 
-    document.getElementById('loading').classList.remove('hidden');
-    document.getElementById('results').classList.add('hidden');
-    document.getElementById('errorBox').classList.add('hidden');
+    ['results','nearbySection','deResults','wellnessResults','cruiseResults','errorBox'].forEach(id =>
+        document.getElementById(id).classList.add('hidden')
+    );
 
+    if (travelType === 'kreuzfahrt') { renderCruiseResults(payload); return; }
+    if (travelType === 'deutschland') { await renderDeutschlandResults(payload); return; }
+    if (travelType === 'wellness')    { await renderWellnessResults(payload);    return; }
+
+    document.getElementById('loadingText').textContent = 'Suche bei Ryanair…';
+    document.getElementById('loading').classList.remove('hidden');
     try {
         const resp = await fetch('/search', {
             method: 'POST',
@@ -276,30 +520,25 @@ document.getElementById('searchForm').addEventListener('submit', async function 
         if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
         await renderResults(data, payload);
     } catch (err) {
-        const box = document.getElementById('errorBox');
-        box.textContent = '⚠️ ' + err.message;
-        box.classList.remove('hidden');
+        showError(err.message);
     } finally {
         document.getElementById('loading').classList.add('hidden');
     }
 });
 
-// ── Ergebnisse rendern ─────────────────────────────────────────────────────
+// ── Flug-Ergebnisse rendern ────────────────────────────────────────────────
 async function renderResults(data, payload) {
     const items      = data.results || [];
     const passengers = data.passengers || payload.passengers;
     const budget     = data.budget     || payload.budget;
 
     if (!items.length) {
-        const box = document.getElementById('errorBox');
-        box.textContent = '⚠️ Keine Ergebnisse — Budget erhöhen oder anderen Flughafen wählen.';
-        box.classList.remove('hidden');
+        showError('Keine Ergebnisse — Budget erhöhen oder anderen Flughafen wählen.');
         return;
     }
 
     const grid = document.getElementById('cards');
     grid.innerHTML = '';
-
     const mapContainers = [];
 
     items.forEach((item, i) => {
@@ -313,7 +552,6 @@ async function renderResults(data, payload) {
         const hotelLine = hotelTotal !== null
             ? `<div class="detail hotel-found">🏨&nbsp; Hotel ab <strong>${item.hotel_price_per_night}€/Nacht</strong> · ${nights} Nächte ≈ <strong>${hotelTotal.toFixed(0)}€</strong></div>`
             : `<div class="detail">🏨&nbsp; Für Hotel übrig: <strong>${remaining.toFixed(0)} €</strong></div>`;
-
         const totalLine = grandTotal !== null
             ? `<div class="detail total-line">💰&nbsp; Gesamt ca. <strong>${grandTotal.toFixed(0)} €</strong> von ${budget.toLocaleString('de')} €</div>`
             : '';
@@ -344,7 +582,6 @@ async function renderResults(data, payload) {
                 <a href="${item.direct_url}" target="_blank" rel="noopener" class="btn-action btn-flight">✈️ Ryanair</a>
                 <a href="${item.booking_url}" target="_blank" rel="noopener" class="btn-action btn-hotel">🏨 Hotel</a>
             </div>`;
-
         grid.appendChild(card);
         mapContainers.push({ id: mapId, code: item.country_code });
     });
@@ -353,7 +590,6 @@ async function renderResults(data, payload) {
     document.getElementById('results').classList.remove('hidden');
     document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
 
-    // Nearby-Airports rendern
     const nearbyGroups = document.getElementById('nearbyGroups');
     nearbyGroups.innerHTML = '';
     const nearby = data.nearby || [];
@@ -383,7 +619,6 @@ async function renderResults(data, payload) {
                 const hotelLine = hotelTotal !== null
                     ? `<div class="detail hotel-found">🏨&nbsp; Hotel ab <strong>${item.hotel_price_per_night}€/Nacht</strong> · ${nights} Nächte ≈ <strong>${hotelTotal.toFixed(0)}€</strong></div>`
                     : `<div class="detail">🏨&nbsp; Für Hotel übrig: <strong>${remaining.toFixed(0)} €</strong></div>`;
-
                 const totalLine = grandTotal !== null
                     ? `<div class="detail total-line">💰&nbsp; Gesamt ca. <strong>${grandTotal.toFixed(0)} €</strong> von ${budget.toLocaleString('de')} €</div>`
                     : '';
@@ -423,7 +658,6 @@ async function renderResults(data, payload) {
         document.getElementById('nearbySection').classList.add('hidden');
     }
 
-    // Alle Karten parallel rendern (Haupt + Nearby)
     await Promise.all(mapContainers.map(({ id, code }) =>
         renderMap(document.getElementById(id), code)
     ));
