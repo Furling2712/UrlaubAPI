@@ -39,6 +39,10 @@
                     <input type="radio" name="travel_type" value="kreuzfahrt">
                     <span>🚢 Kreuzfahrt</span>
                 </label>
+                <label class="radio-option">
+                    <input type="radio" name="travel_type" value="pauschalreise">
+                    <span>🏖️ Pauschalreise</span>
+                </label>
             </div>
         </div>
 
@@ -100,6 +104,28 @@
             </div>
         </div>
 
+        <div class="field" id="mealField" style="display:none">
+            <label>Mindest-Verpflegung</label>
+            <div class="radio-group">
+                <label class="radio-option">
+                    <input type="radio" name="min_meal" value="0" checked>
+                    <span>Egal</span>
+                </label>
+                <label class="radio-option">
+                    <input type="radio" name="min_meal" value="1">
+                    <span>Frühstück</span>
+                </label>
+                <label class="radio-option">
+                    <input type="radio" name="min_meal" value="2">
+                    <span>Halbpension</span>
+                </label>
+                <label class="radio-option">
+                    <input type="radio" name="min_meal" value="4">
+                    <span>All Inclusive</span>
+                </label>
+            </div>
+        </div>
+
         <button type="submit" class="btn-search">Jetzt suchen</button>
     </form>
 </div>
@@ -130,6 +156,17 @@
     <div id="nearbyGroups"></div>
 </div>
 
+<div id="suggestionsSection" class="nearby-section hidden">
+    <div class="nearby-header">
+        <span class="nearby-icon">💡</span>
+        <div>
+            <h2>Mit etwas mehr Budget…</h2>
+            <p>Diese Ziele liegen knapp über deinem Limit — zum Vergleich</p>
+        </div>
+    </div>
+    <div class="cards-grid" id="suggestionCards"></div>
+</div>
+
 <div id="deResults" class="results-section hidden">
     <div class="results-header">
         <h2>🇩🇪 Urlaub in Deutschland</h2>
@@ -144,6 +181,17 @@
         <span class="results-count">Bis ~150 km ab Eschweiler · D / BE / NL</span>
     </div>
     <div class="cards-grid" id="wellnessCards"></div>
+</div>
+
+<div id="packageResults" class="nearby-section hidden">
+    <div class="nearby-header">
+        <span class="nearby-icon">🏖️</span>
+        <div>
+            <h2>Pauschalreisen</h2>
+            <p>Check24 Veranstalter-Pakete &amp; Ryanair + Hotel kombiniert</p>
+        </div>
+    </div>
+    <div id="packageCards"></div>
 </div>
 
 <div id="cruiseResults" class="results-section hidden">
@@ -293,16 +341,18 @@ function updateDur() {
 // ── Reiseart umschalten ────────────────────────────────────────────────────
 function updateTravelType() {
     const type = document.querySelector('input[name="travel_type"]:checked').value;
-    const isFlug = type === 'flug';
+    const isFlug      = type === 'flug';
+    const isPauschal  = type === 'pauschalreise';
 
-    document.getElementById('originField').style.display  = isFlug ? '' : 'none';
+    document.getElementById('originField').style.display  = (isFlug || isPauschal) ? '' : 'none';
     document.getElementById('nonstopField').style.display = isFlug ? '' : 'none';
+    document.getElementById('mealField').style.display    = isPauschal ? '' : 'none';
     // Wellness und Deutschland brauchen nur ein Startdatum
-    const needsRange = isFlug || type === 'kreuzfahrt';
+    const needsRange = isFlug || type === 'kreuzfahrt' || isPauschal;
     document.getElementById('depToField').style.display   = needsRange ? '' : 'none';
     document.getElementById('depFromLabel').textContent   = needsRange ? 'Frühster Abflug' : 'Anreisedatum';
 
-    ['results','nearbySection','deResults','wellnessResults','cruiseResults','errorBox'].forEach(id =>
+    ['results','nearbySection','suggestionsSection','deResults','wellnessResults','cruiseResults','packageResults','errorBox'].forEach(id =>
         document.getElementById(id).classList.add('hidden')
     );
 }
@@ -438,6 +488,120 @@ async function renderWellnessResults(payload) {
     }
 }
 
+// ── Sterne rendern ─────────────────────────────────────────────────────────
+function renderStars(n) {
+    if (!n) return '';
+    return '★'.repeat(Math.min(n, 5)) + '☆'.repeat(Math.max(0, 5 - n));
+}
+
+// ── Pauschalreisen-Ergebnisse (weg.de) ────────────────────────────────────
+async function renderPackageResults(pkgData, flyData, payload) {
+    const grid = document.getElementById('packageCards');
+    grid.innerHTML = '';
+
+    const offers = pkgData.offers || [];
+
+    const header = document.createElement('div');
+    header.className = 'nearby-header';
+    header.innerHTML = `
+        <span class="nearby-icon">🏖️</span>
+        <div>
+            <h2>Pauschalreisen — Flug + Hotel</h2>
+            <p>Echte Preise von weg.de · ${offers.length} Angebote im Budget · sortiert nach Preis</p>
+        </div>`;
+    grid.appendChild(header);
+
+    if (offers.length) {
+        const pkgGrid = document.createElement('div');
+        pkgGrid.className = 'cards-grid';
+        const mapContainersP = [];
+
+        offers.forEach((o, i) => {
+            const mapId   = `pmap-${i}`;
+            const stars   = renderStars(o.stars);
+            const total   = o.price_total || (o.price_per_person * payload.passengers);
+            const overBudget = total > payload.budget;
+
+            const imgHtml = o.image
+                ? `<div class="card-img" style="background-image:url('${o.image}')"></div>`
+                : `<div class="card-map" id="${mapId}"></div>`;
+
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                ${imgHtml}
+                <div class="card-body">
+                    <div class="card-title-row">
+                        <div class="card-dest">
+                            <img class="dest-flag" src="https://flagcdn.com/32x24/${o.country_code.toLowerCase()}.png"
+                                 alt="${o.country_code}" onerror="this.style.display='none'">
+                            <div>
+                                <h3>${o.hotel_name}</h3>
+                                <small style="color:#888;font-size:.78rem">${o.city}${o.region ? ' · ' + o.region : ''}, ${o.country}</small>
+                            </div>
+                        </div>
+                        <div class="price-tag${overBudget ? ' price-over' : ''}">
+                            <span class="price-num">${o.price_per_person.toFixed(0)}&thinsp;€</span>
+                            <span class="price-pp">/ Person</span>
+                        </div>
+                    </div>
+                    <div class="card-details">
+                        ${stars ? `<div class="detail pkg-stars">${renderStars(stars)}</div>` : ''}
+                        <div class="detail">
+                            📅&nbsp; <strong>${fmtDate(o.dep_date)}</strong> – <strong>${fmtDate(o.ret_date)}</strong>
+                            &nbsp;·&nbsp; 🌙&nbsp; <strong>${o.duration} Nächte</strong>
+                        </div>
+                        <div class="detail">
+                            ✈️&nbsp; <strong>${o.dep_airport || '—'}</strong> → <strong>${o.dst_airport || '—'}</strong>
+                            &nbsp;·&nbsp; 🍽️&nbsp; <strong>${o.meal_label || o.meal_type || '—'}</strong>
+                        </div>
+                        ${o.tour_operator ? `<div class="detail" style="color:#888;font-size:.78rem">📋&nbsp; ${o.tour_operator}</div>` : ''}
+                        <div class="detail total-line">
+                            💰&nbsp; <strong>${o.price_per_person.toFixed(0)} €</strong> / Person
+                            &nbsp;·&nbsp; Gesamt: <strong>${total.toFixed(0)} €</strong>
+                            ${overBudget ? '&nbsp;⚠️ über Budget' : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="card-actions">
+                    <a href="${o.booking_url}" target="_blank" rel="noopener" class="btn-action btn-flight">
+                        🏖️ Auf weg.de buchen →
+                    </a>
+                </div>`;
+            pkgGrid.appendChild(card);
+
+            if (!o.image) {
+                mapContainersP.push({ id: mapId, code: o.country_code });
+            }
+        });
+
+        grid.appendChild(pkgGrid);
+
+        await Promise.all(mapContainersP.map(({ id, code }) => {
+            const el = document.getElementById(id);
+            return el ? renderMap(el, code) : Promise.resolve();
+        }));
+
+    } else {
+        const noOffers = document.createElement('div');
+        noOffers.className = 'card';
+        noOffers.innerHTML = `
+            <div class="card-body">
+                <div class="card-details" style="padding:12px 0">
+                    <div class="detail">Keine Angebote im Budget gefunden.</div>
+                    <div class="detail">Budget erhöhen oder Zeitraum anpassen.</div>
+                </div>
+            </div>
+            <div class="card-actions">
+                <a href="${pkgData.search_url || 'https://www.weg.de/urlaub/'}" target="_blank" rel="noopener" class="btn-action btn-flight">🔍 Auf weg.de suchen →</a>
+            </div>`;
+        grid.appendChild(noOffers);
+    }
+
+    document.getElementById('packageResults').classList.remove('hidden');
+    document.getElementById('packageResults').scrollIntoView({ behavior: 'smooth' });
+}
+
 // ── Kreuzfahrt-Ergebnisse ──────────────────────────────────────────────────
 function renderCruiseResults(payload) {
     const lines = [
@@ -498,11 +662,32 @@ document.getElementById('searchForm').addEventListener('submit', async function 
         budget:         parseInt(document.getElementById('budget').value),
         passengers:     parseInt(document.getElementById('passengers').value),
         nonstop:        document.getElementById('nonstop').checked,
+        min_meal:       parseInt(document.querySelector('input[name="min_meal"]:checked')?.value || '0'),
     };
 
-    ['results','nearbySection','deResults','wellnessResults','cruiseResults','errorBox'].forEach(id =>
+    ['results','nearbySection','suggestionsSection','deResults','wellnessResults','cruiseResults','packageResults','errorBox'].forEach(id =>
         document.getElementById(id).classList.add('hidden')
     );
+
+    if (travelType === 'pauschalreise') {
+        document.getElementById('loadingText').textContent = 'Suche Pauschalreisen bei weg.de…';
+        document.getElementById('loading').classList.remove('hidden');
+        try {
+            const pkgResp = await fetch('/search-package', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const pkgData = await pkgResp.json();
+            if (!pkgResp.ok && pkgData.error) throw new Error(pkgData.error);
+            await renderPackageResults(pkgData, null, payload);
+        } catch (err) {
+            showError(err.message);
+        } finally {
+            document.getElementById('loading').classList.add('hidden');
+        }
+        return;
+    }
 
     if (travelType === 'kreuzfahrt') { renderCruiseResults(payload); return; }
     if (travelType === 'deutschland') { await renderDeutschlandResults(payload); return; }
@@ -656,6 +841,61 @@ async function renderResults(data, payload) {
         document.getElementById('nearbySection').classList.remove('hidden');
     } else {
         document.getElementById('nearbySection').classList.add('hidden');
+    }
+
+    // Suggestions: Vorschläge mit entspanntem Budget
+    const suggGrid = document.getElementById('suggestionCards');
+    suggGrid.innerHTML = '';
+    const suggestions = data.suggestions || [];
+    if (suggestions.length) {
+        suggestions.forEach((item, i) => {
+            const flightTotal = item.price * passengers;
+            const nights      = Math.round((new Date(item.return_date) - new Date(item.departure_date)) / 86400000);
+            const hotelTotal  = item.hotel_price_per_night ? item.hotel_price_per_night * nights * Math.ceil(passengers / 2) : null;
+            const grandTotal  = hotelTotal !== null ? flightTotal + hotelTotal : null;
+            const overBy      = flightTotal - budget;
+            const mapId       = `sgmap-${i}`;
+
+            const hotelLine = hotelTotal !== null
+                ? `<div class="detail hotel-found">🏨&nbsp; Hotel ab <strong>${item.hotel_price_per_night}€/Nacht</strong> · ${nights} Nächte ≈ <strong>${hotelTotal.toFixed(0)}€</strong></div>`
+                : `<div class="detail">🏨&nbsp; Für Hotel übrig: <strong>${Math.max(0, budget - flightTotal).toFixed(0)} €</strong></div>`;
+            const totalLine = grandTotal !== null
+                ? `<div class="detail">💰&nbsp; Gesamt ca. <strong>${grandTotal.toFixed(0)} €</strong></div>`
+                : '';
+
+            const card = document.createElement('div');
+            card.className = 'card card-nearby';
+            card.innerHTML = `
+                <div class="card-map" id="${mapId}"></div>
+                <div class="card-body">
+                    <div class="card-title-row">
+                        <div class="card-dest">
+                            <img class="dest-flag" src="https://flagcdn.com/32x24/${item.country_code.toLowerCase()}.png" alt="${item.country_code}" onerror="this.style.display='none'">
+                            <h3>${item.destination}</h3>
+                        </div>
+                        <div class="price-tag" style="background:var(--orange,#ff7043)">
+                            <span class="price-num">${item.price.toFixed(0)}&thinsp;€</span>
+                            <span class="price-pp">/ Person Flug</span>
+                        </div>
+                    </div>
+                    <div class="card-details">
+                        <div class="detail" style="color:#e64a19">⚠️&nbsp; Flug liegt <strong>+${overBy.toFixed(0)} €</strong> über deinem Budget</div>
+                        <div class="detail">📅&nbsp; ${fmtDate(item.departure_date)} &ndash; ${fmtDate(item.return_date)} (${nights} Nächte)</div>
+                        <div class="detail">✈️&nbsp; Flug gesamt: <strong>${flightTotal.toFixed(0)} €</strong></div>
+                        ${hotelLine}
+                        ${totalLine}
+                    </div>
+                </div>
+                <div class="card-actions">
+                    <a href="${item.direct_url}" target="_blank" rel="noopener" class="btn-action btn-flight">✈️ Ryanair</a>
+                    <a href="${item.booking_url}" target="_blank" rel="noopener" class="btn-action btn-hotel">🏨 Hotel</a>
+                </div>`;
+            suggGrid.appendChild(card);
+            mapContainers.push({ id: mapId, code: item.country_code });
+        });
+        document.getElementById('suggestionsSection').classList.remove('hidden');
+    } else {
+        document.getElementById('suggestionsSection').classList.add('hidden');
     }
 
     await Promise.all(mapContainers.map(({ id, code }) =>

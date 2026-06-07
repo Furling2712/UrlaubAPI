@@ -339,6 +339,73 @@ input[type="range"] {
 .btn-flight { background: var(--blue); color: #fff; }
 .btn-hotel  { background: var(--teal); color: #fff; }
 
+/* ── HOTEL-BILD IN KARTE ─────────────────────────────────────────────────── */
+.card-img {
+    width: 100%;
+    height: 160px;
+    background-size: cover;
+    background-position: center;
+    border-radius: var(--radius) var(--radius) 0 0;
+    flex-shrink: 0;
+}
+
+.pkg-stars {
+    color: #f9a825;
+    font-size: 1rem;
+    letter-spacing: 1px;
+}
+
+.price-tag.price-over {
+    background: #e64a19;
+}
+
+/* ── PAUSCHALREISEN ANGEBOTE ─────────────────────────────────────────────── */
+.pkg-offers-list {
+    margin: 10px 20px 4px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.pkg-offer-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    background: #f8fafc;
+    font-size: .88rem;
+}
+
+.pkg-offer-row.over-budget { background: #fff8f6; }
+
+.pkg-offer-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+}
+
+.pkg-offer-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.pkg-offer-price {
+    font-weight: 700;
+    color: var(--blue);
+    white-space: nowrap;
+}
+
+.pkg-offer-price.price-over { color: #e64a19; }
+
 /* ── RESPONSIVE ──────────────────────────────────────────────────────────── */
 @media (max-width: 960px)  { .cards-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 600px)  {

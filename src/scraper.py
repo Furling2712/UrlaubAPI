@@ -294,6 +294,187 @@ def get_germany_hotel_options(checkin, checkout, passengers):
     ]
 
 
+WEG_BASE    = "https://www.weg.de"
+WEG_SEARCH  = "https://api.weg.de/comvel-productsearch-service/rest/productsearch2"
+WEG_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "de-DE,de;q=0.9",
+    "Referer": "https://www.weg.de/",
+    "Origin": "https://www.weg.de",
+}
+
+# Nearby airports for CGN/NRN so we find more flights
+NEARBY_AIRPORTS = {
+    "CGN": ["CGN", "DUS", "NRN", "FRA"],
+    "NRN": ["NRN", "CGN", "DUS", "FRA"],
+}
+
+WEGDE_COUNTRIES = ["GR", "TR", "EG", "ES", "TN", "HR", "PT", "CY", "BG", "MA"]
+
+MEAL_LABEL = {
+    "AI": "All Inclusive", "UAI": "Ultra All Inclusive",
+    "HP": "Halbpension",   "VP":  "Vollpension",
+    "FR": "Frühstück",     "F":   "Frühstück",
+    "OV": "Nur Übernachtung",
+}
+
+# Hierarchy for minimum-meal filtering
+MEAL_RANK = {
+    "Ü": 0, "OV": 0,
+    "F": 1, "FR": 1, "ÜF": 1,
+    "HP": 2,
+    "VP": 3,
+    "AI": 4, "UAI": 5,
+}
+
+
+def _weg_hotel_booking_url(hotel_name, hotel_id, dep_date, country, dur, passengers):
+    from urllib.parse import urlencode
+    import re
+    slug = re.sub(r'[^a-z0-9]+', '-', (hotel_name or "hotel").lower()).strip('-')
+    # Use exact departure date as 1-day window so weg.de shows offers for that date
+    params = urlencode({
+        "country": country,
+        "duration": dur,
+        "from": dep_date,
+        "to": dep_date,
+        "sort": "price",
+        "travellerRoomAllocations": passengers,
+        "travellers": ",".join(["30"] * passengers),
+        "rooms":      ",".join(["30"] * passengers),
+    })
+    return f"{WEG_BASE}/hotel/{slug}-cid_{hotel_id}?{params}"
+
+
+def _fetch_weg_country_dur(country, dep_from, dep_to, dur, passengers, budget, origin):
+    from urllib.parse import urlencode
+    travellers_str = ",".join(["30"] * passengers)
+    qs = urlencode({
+        "country": country,
+        "duration": dur,
+        "from": dep_from,
+        "to": dep_to,
+        "sort": "price",
+        "travellerRoomAllocations": passengers,
+        "travellers": travellers_str,
+        "rooms":      travellers_str,
+        "channel": "PACKAGE",
+        "departureFlightTimeUntil": 1440,
+        "returnFlightTimeUntil": 1440,
+        "count": 100,
+    })
+    try:
+        resp = requests.get(WEG_SEARCH + "?" + qs, headers=WEG_HEADERS, timeout=15)
+        if resp.status_code != 200:
+            return []
+
+        result = []
+        for o in resp.json().get("offerList", []):
+            dep_ap = (o.get("departureAirport") or {}).get("iataCode", "")
+
+            price = o.get("price") or o.get("totalPrice")
+            if not price:
+                continue
+            price = float(price)
+            total = round(price * passengers, 2)
+
+            hotel    = o.get("comvelHotel") or {}
+            hotel_id = o.get("comvelHotelId") or hotel.get("id", "")
+            h_name   = hotel.get("hotelName", "")
+            city_obj = hotel.get("city") or {}
+            city     = city_obj.get("name", "") if isinstance(city_obj, dict) else str(city_obj)
+            region   = (hotel.get("region") or {}).get("name", "") if isinstance(hotel.get("region"), dict) else ""
+            country_name = (hotel.get("country") or {}).get("name", "") if isinstance(hotel.get("country"), dict) else ""
+            stars    = hotel.get("stars") or hotel.get("hotelCategory") or o.get("hotelCategory")
+            meal     = (o.get("mealType") or {})
+            meal_abbr  = meal.get("abbr", "")
+            meal_name  = meal.get("name", "")
+            meal_label = MEAL_LABEL.get(meal_abbr, "") or meal_name
+
+            dep_date = o.get("from", dep_from)
+            ret_date = o.get("to",   "")
+
+            result.append({
+                "hotel_name":       h_name,
+                "city":             city,
+                "region":           region,
+                "country":          country_name,
+                "country_code":     country,
+                "duration":         o.get("duration", dur),
+                "dep_date":         dep_date,
+                "ret_date":         ret_date,
+                "stars":            stars,
+                "meal_type":        meal_abbr,
+                "meal_label":       meal_label,
+                "room_type":        (o.get("roomType") or {}).get("abbr", ""),
+                "price_per_person": round(price, 2),
+                "price_total":      total,
+                "dep_airport":      dep_ap,
+                "dst_airport":      (o.get("destinationAirport") or {}).get("iataCode", ""),
+                "tour_operator":    (o.get("tourOperator") or {}).get("name", ""),
+                "rating":           hotel.get("ratingAverage"),
+                "reviews":          hotel.get("reviewsCount"),
+                "image":            "",
+                "booking_url":      _weg_hotel_booking_url(
+                    h_name, hotel_id, dep_date,
+                    country, o.get("duration", dur), passengers
+                ),
+                "source": "weg.de",
+            })
+        return result
+    except Exception:
+        return []
+
+
+def search_package_deals(origin, dep_from, dep_to, dur_min, dur_max, passengers, budget=None, min_meal=0):
+    dur_mid = (dur_min + dur_max) // 2
+    durations = sorted({dur_min, dur_mid, dur_max})
+    tasks = [(c, d) for c in WEGDE_COUNTRIES for d in durations]
+
+    def fetch(args):
+        return _fetch_weg_country_dur(args[0], dep_from, dep_to, args[1], passengers, budget, origin)
+
+    all_offers = []
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        for result in as_completed([ex.submit(fetch, t) for t in tasks]):
+            try:
+                all_offers.extend(result.result())
+            except Exception:
+                pass
+
+    # Apply minimum meal filter
+    if min_meal > 0:
+        all_offers = [o for o in all_offers if MEAL_RANK.get(o["meal_type"], 0) >= min_meal]
+
+    # Deduplicate: keep cheapest offer per hotel
+    best: dict = {}
+    for o in all_offers:
+        key = (o["hotel_name"].lower().strip(), o["country_code"])
+        if key not in best or o["price_per_person"] < best[key]["price_per_person"]:
+            best[key] = o
+
+    # Within-budget first, then over-budget — each group sorted by price
+    in_budget  = sorted([o for o in best.values() if not budget or o["price_total"] <= budget],
+                        key=lambda x: x["price_per_person"])
+    over_budget = sorted([o for o in best.values() if budget and o["price_total"] > budget],
+                         key=lambda x: x["price_per_person"])
+    sorted_all = in_budget + over_budget
+
+    # Max 4 results per country, then take top 40 overall
+    country_count: dict = {}
+    results = []
+    for o in sorted_all:
+        cc = o["country_code"]
+        if country_count.get(cc, 0) < 4:
+            results.append(o)
+            country_count[cc] = country_count.get(cc, 0) + 1
+        if len(results) >= 40:
+            break
+
+    return {"offers": results, "source": "weg.de", "search_url": WEG_BASE + "/urlaub/"}
+
+
 def search_nearby(origin, dep_date, ret_date, budget, passengers, duration_min=5, duration_max=12):
     airports = NEARBY.get(origin, [])
     if not airports:
